@@ -1,0 +1,7 @@
+# Runtime data created by the planner; do not commit personal study history.
+study log.txt
+
+# Python bytecode and local caches.
+__pycache__/
+*.py[cod]
+.pytest_cache/
