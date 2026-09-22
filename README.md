@@ -23,7 +23,7 @@ Every `SCAN_INTERVAL_MS` (default **10 minutes**) the agent runs six phases:
 | 🔎 **RESEARCH** | Screens by liquidity, then reads X sentiment on the most active markets |
 | 📊 **ANALYZE** | Blends sentiment + book microstructure into a **fair-value estimate**; computes edge = \|fair − market\| |
 | ✅ **DECIDE** | Keeps only markets with **edge ≥ 8%**, enough liquidity, and edge that survives the spread |
-| 📐 **SIZE** | **Fractional Kelly** sizing, capped per position |
+| 📐 **SIZE** | **Fractional Kelly** sizing, hard-capped at **6% of equity per bet** so one bad call can't wipe the bankroll |
 | ⚡ **EXECUTE** | Places a **paper fill** against the book (or a guarded live order) |
 
 The dashboard shows equity/P&L, a live phase pipeline, a scrolling terminal, a
@@ -96,11 +96,30 @@ All settings live in `.env` (see `.env.example`):
 | `MARKET_UNIVERSE` | `2000` | How many markets to track |
 | `EDGE_THRESHOLD` | `0.08` | Minimum mispricing to trade (8%) |
 | `MIN_LIQUIDITY_USD` | `5000` | Skip thinner markets |
-| `MAX_POSITION_USD` | `250` | Hard cap per position |
+| `KELLY_FRACTION` | `0.25` | Fractional Kelly multiplier on full Kelly |
+| `MAX_POSITION_PCT` | `0.06` | **Risk rail: max 6% of equity per bet** |
+| `MAX_POSITION_USD` | `0` | Optional absolute $ ceiling (0 = off) |
 | `BANKROLL_USD` | `10000` | Starting paper bankroll |
-| `KELLY_FRACTION` | `0.25` | Fractional Kelly multiplier |
 
 ---
+
+## How position sizing works
+
+Every bet is sized with the **Kelly criterion**, then bounded by a hard risk cap:
+
+```
+full Kelly   f*      = (b·p − q) / b          # b = net odds, p = win prob, q = 1−p
+fractional          = KELLY_FRACTION · f*     # quarter-Kelly by default (smoother)
+bet fraction        = min(fractional, MAX_POSITION_PCT)   # ← the 6% risk rail
+bet size ($)        = bet fraction · current equity       # scales with the bankroll
+```
+
+The **6%-of-equity cap** is the safety rail: even when Kelly says "bet big" on a
+huge edge, no single position can risk more than 6% of the current bankroll — so
+one bad call can't wipe it out. Because the cap is a *percentage of live equity*,
+bets shrink automatically after drawdowns and grow as the bankroll compounds.
+When the rail binds a bet, it's flagged 🛡 in the mispricing radar and noted in
+the terminal log.
 
 ## Architecture
 

@@ -41,7 +41,7 @@ export class Agent {
   start() {
     if (this.running) return;
     this.running = true;
-    this.emit('info', 'SYSTEM', `Agent online — data:${this.provider.name()} mode:${this.config.tradeMode} edge>=${(this.config.edgeThreshold * 100).toFixed(0)}%`);
+    this.emit('info', 'SYSTEM', `Agent online — data:${this.provider.name()} mode:${this.config.tradeMode} | edge>=${(this.config.edgeThreshold * 100).toFixed(0)}% | ${(this.config.kellyFraction * 100).toFixed(0)}% Kelly, capped ${(this.config.maxPositionPct * 100).toFixed(0)}% equity/bet`);
     // Kick off immediately, then on interval.
     this.runScan().catch((e) => this.emit('error', 'SYSTEM', 'scan crashed: ' + e.message));
     this.timer = setInterval(() => {
@@ -113,8 +113,11 @@ export class Agent {
         if (this.portfolio.state.cash < sig.entryPrice * 1) break; // out of cash
         const market = this.marketsById.get(sig.marketId);
 
+        const kellyNote = sig.riskCapped
+          ? `Kelly ${(sig.kellyUsed * 100).toFixed(1)}% capped to ${(this.config.maxPositionPct * 100).toFixed(0)}% risk rail`
+          : `Kelly ${(sig.kellyUsed * 100).toFixed(1)}% of equity`;
         this.emit('signal', 'DECIDE',
-          `${sig.side} "${truncate(sig.question)}" — fair ${(sig.fairEstimate * 100).toFixed(0)}c vs mkt ${(sig.mid * 100).toFixed(0)}c, edge ${(sig.edge * 100).toFixed(1)}%`,
+          `${sig.side} "${truncate(sig.question)}" — fair ${(sig.fairEstimate * 100).toFixed(0)}c vs mkt ${(sig.mid * 100).toFixed(0)}c, edge ${(sig.edge * 100).toFixed(1)}% | ${kellyNote} = $${fmt(sig.sizeUsd)}`,
           { marketId: sig.marketId, edge: sig.edge });
 
         let fill;
@@ -172,6 +175,7 @@ export class Agent {
       config: {
         edgeThreshold: this.config.edgeThreshold,
         minLiquidityUsd: this.config.minLiquidityUsd,
+        maxPositionPct: this.config.maxPositionPct,
         maxPositionUsd: this.config.maxPositionUsd,
         scanIntervalMs: this.config.scanIntervalMs,
         marketUniverse: this.config.marketUniverse,

@@ -39,7 +39,7 @@ function render(s) {
     kpi('Unrealized', money(p.unrealizedPnl), 'mark-to-market', cls(p.unrealizedPnl)),
     kpi('Exposure', money(p.exposure), 'at risk'),
     kpi('Opportunities', s.opportunities.length, `edge ≥ ${(s.config.edgeThreshold * 100).toFixed(0)}%`),
-    kpi('Universe', fmt(s.universeSize), `scan #${s.scanCount}`),
+    kpi('Risk rail', `${(s.config.kellyFraction * 100).toFixed(0)}% Kelly`, `≤ ${(s.config.maxPositionPct * 100).toFixed(0)}% equity/bet`),
   ].join('');
 
   // pipeline
@@ -75,7 +75,7 @@ function render(s) {
         <td class="num">${cents(o.fairEstimate)}</td>
         <td class="num edge-badge">${pct(o.edge)}</td>
         <td class="num">${sentBar(o.sentiment)}</td>
-        <td class="num">${money(o.sizeUsd)}</td>
+        <td class="num" title="${o.riskCapped ? 'Kelly ' + pct(o.kellyUsed) + ' capped by risk rail' : 'fractional Kelly ' + pct(o.kellyUsed)}">${money(o.sizeUsd)} ${o.riskCapped ? '<span class="cap">🛡</span>' : ''}<small>${pct(o.sizePctOfEquity)}</small></td>
       </tr>`).join('');
   }
 

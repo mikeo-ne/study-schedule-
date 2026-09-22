@@ -40,7 +40,11 @@ export const config = {
   marketUniverse: num(process.env.MARKET_UNIVERSE, 2000),
   edgeThreshold: num(process.env.EDGE_THRESHOLD, 0.08),
   minLiquidityUsd: num(process.env.MIN_LIQUIDITY_USD, 5000),
-  maxPositionUsd: num(process.env.MAX_POSITION_USD, 250),
+  // Hard risk cap: no single bet may exceed this fraction of current equity,
+  // so one bad call can't wipe the bankroll. This is the primary sizing cap.
+  maxPositionPct: num(process.env.MAX_POSITION_PCT, 0.06),
+  // Optional absolute ceiling on top of the % cap (0 = disabled).
+  maxPositionUsd: num(process.env.MAX_POSITION_USD, 0),
   bankrollUsd: num(process.env.BANKROLL_USD, 10_000),
   kellyFraction: num(process.env.KELLY_FRACTION, 0.25),
 

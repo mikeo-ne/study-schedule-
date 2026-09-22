@@ -32,14 +32,36 @@ export function estimateFairValue(market, sentiment) {
   return clamp(market.yesPrice + (sImplied - market.yesPrice) * pull, 0.01, 0.99);
 }
 
-// Fractional Kelly for a binary market. b = payout odds if YES resolves at 1.
-export function kellySize(prob, price, bankroll, kellyFraction, maxUsd) {
-  if (price <= 0 || price >= 1) return 0;
-  const b = (1 - price) / price;   // net odds on a YES buy
+// Fractional Kelly for a binary market, hard-capped at a fraction of equity.
+//
+//   full Kelly f* = (b*p - q) / b        (fraction of bankroll to wager)
+//   we bet: min( kellyFraction * f* , maxPositionPct ) * equity
+//   and optionally clamp to an absolute dollar ceiling.
+//
+// The percent cap is the safety rail: even if Kelly says "bet big", one bad
+// call can never cost more than `maxPositionPct` of current equity.
+export function kellySize(prob, price, bankroll, opts) {
+  const { kellyFraction, maxPositionPct, maxPositionUsd = 0 } = opts;
+  if (price <= 0 || price >= 1) return { sizeUsd: 0, kellyFull: 0, kellyUsed: 0, capped: false };
+
+  const b = (1 - price) / price;          // net odds on the side we take
   const q = 1 - prob;
-  const edgeKelly = (b * prob - q) / b; // fraction of bankroll
-  const frac = Math.max(0, edgeKelly) * kellyFraction;
-  return Math.min(maxUsd, Math.round(frac * bankroll));
+  const kellyFull = (b * prob - q) / b;   // full-Kelly fraction of bankroll
+  const kellyUsed = Math.max(0, kellyFull) * kellyFraction; // fractional Kelly
+
+  // Apply the 6%-of-equity risk cap.
+  const cappedFrac = Math.min(kellyUsed, maxPositionPct);
+  let sizeUsd = cappedFrac * bankroll;
+
+  // Optional absolute ceiling on top of the % cap.
+  if (maxPositionUsd > 0) sizeUsd = Math.min(sizeUsd, maxPositionUsd);
+
+  return {
+    sizeUsd: Math.round(sizeUsd),
+    kellyFull: round4(kellyFull),
+    kellyUsed: round4(kellyUsed),
+    capped: kellyUsed > maxPositionPct,   // true when the risk rail bound the bet
+  };
 }
 
 export function evaluateMarket(market, sentiment, config, bankroll) {
@@ -75,13 +97,18 @@ export function evaluateMarket(market, sentiment, config, bankroll) {
     reasons.push(`edge collapses after spread (${(netEdge * 100).toFixed(1)}%)`);
   }
 
-  const sizeUsd = tradable
-    ? kellySize(winProb, entryPrice, bankroll, config.kellyFraction, config.maxPositionUsd)
-    : 0;
+  const sizing = tradable
+    ? kellySize(winProb, entryPrice, bankroll, {
+        kellyFraction: config.kellyFraction,
+        maxPositionPct: config.maxPositionPct,
+        maxPositionUsd: config.maxPositionUsd,
+      })
+    : { sizeUsd: 0, kellyFull: 0, kellyUsed: 0, capped: false };
 
+  const sizeUsd = sizing.sizeUsd;
   if (tradable && sizeUsd <= 0) {
     tradable = false;
-    reasons.push('Kelly size rounds to $0');
+    reasons.push('Kelly size rounds to $0 (no positive edge after odds)');
   }
 
   return {
@@ -99,6 +126,10 @@ export function evaluateMarket(market, sentiment, config, bankroll) {
     sentiment,
     liquidityUsd: market.liquidityUsd,
     sizeUsd,
+    kellyFull: sizing.kellyFull,
+    kellyUsed: sizing.kellyUsed,
+    riskCapped: sizing.capped,
+    sizePctOfEquity: bankroll > 0 ? round4(sizeUsd / bankroll) : 0,
     tradable,
     reasons,
   };
