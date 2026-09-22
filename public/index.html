@@ -30,6 +30,21 @@
     <!-- KPI row -->
     <section class="kpis" id="kpis"></section>
 
+    <!-- Equity curve -->
+    <section class="panel equity">
+      <div class="panel-head">
+        <h2>◈ equity curve</h2>
+        <div class="eq-legend">
+          <span id="eqNow" class="eq-now"></span>
+          <span id="eqDelta" class="eq-delta"></span>
+        </div>
+      </div>
+      <div class="chart-wrap">
+        <svg id="eqChart" viewBox="0 0 800 200" preserveAspectRatio="none"></svg>
+        <div class="chart-empty" id="eqEmpty">collecting data points…</div>
+      </div>
+    </section>
+
     <!-- Left: research loop terminal -->
     <section class="panel terminal">
       <div class="panel-head">
@@ -43,6 +58,7 @@
         <div class="stage" data-stage="BROWSER"><span>browser</span></div>
         <div class="stage" data-stage="RESEARCH"><span>research</span></div>
         <div class="stage" data-stage="ANALYZE"><span>analyze</span></div>
+        <div class="stage" data-stage="MANAGE"><span>manage</span></div>
         <div class="stage" data-stage="DECIDE"><span>decide</span></div>
         <div class="stage" data-stage="EXECUTE"><span>execute</span></div>
       </div>
@@ -85,7 +101,7 @@
       <div class="table-wrap">
         <table id="tradeTable">
           <thead>
-            <tr><th>time</th><th>action</th><th>market</th><th class="num">px</th><th class="num">$</th><th class="num">edge</th></tr>
+            <tr><th>time</th><th>action</th><th>market</th><th class="num">px</th><th class="num">$</th><th class="num">edge / p&l</th></tr>
           </thead>
           <tbody id="tradeBody"></tbody>
         </table>

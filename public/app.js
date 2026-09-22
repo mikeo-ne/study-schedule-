@@ -33,17 +33,20 @@ function render(s) {
     <div class="hs"><b class="${cls(p.returnPct)}">${sign(p.returnPct)}${p.returnPct}%</b><small>return</small></div>`;
 
   // KPIs
+  const wr = p.winRate == null ? '—' : (p.winRate * 100).toFixed(0) + '%';
   $('kpis').innerHTML = [
     kpi('Equity', money(p.equity), `start ${money(p.startBankroll)}`),
-    kpi('Cash', money(p.cash), `${p.openPositions} positions`),
+    kpi('Realized P&L', money(p.realizedPnl), `W/L ${p.wins}/${p.losses} · ${wr}`, cls(p.realizedPnl)),
     kpi('Unrealized', money(p.unrealizedPnl), 'mark-to-market', cls(p.unrealizedPnl)),
-    kpi('Exposure', money(p.exposure), 'at risk'),
+    kpi('Exposure', `${(p.exposurePct * 100).toFixed(0)}%`, `${money(p.exposure)} / ${(s.config.maxPortfolioExposurePct * 100).toFixed(0)}% cap`),
     kpi('Opportunities', s.opportunities.length, `edge ≥ ${(s.config.edgeThreshold * 100).toFixed(0)}%`),
     kpi('Risk rail', `${(s.config.kellyFraction * 100).toFixed(0)}% Kelly`, `≤ ${(s.config.maxPositionPct * 100).toFixed(0)}% equity/bet`),
   ].join('');
 
+  drawEquity(s.equityCurve || [], p);
+
   // pipeline
-  const order = ['BROWSER', 'RESEARCH', 'ANALYZE', 'DECIDE', 'EXECUTE'];
+  const order = ['BROWSER', 'RESEARCH', 'ANALYZE', 'MANAGE', 'DECIDE', 'EXECUTE'];
   const curPhase = s.log[0]?.phase;
   const curIdx = order.indexOf(curPhase);
   document.querySelectorAll('.stage').forEach((el) => {
@@ -102,16 +105,75 @@ function render(s) {
   if (!s.trades.length) {
     tb.innerHTML = `<tr><td colspan="6" class="empty">no fills yet</td></tr>`;
   } else {
-    tb.innerHTML = s.trades.map((t) => `
-      <tr>
+    tb.innerHTML = s.trades.map((t) => {
+      const isClose = t.type === 'CLOSE';
+      const last = isClose
+        ? `<span class="${cls(t.pnl)}">${sign(t.pnl)}${money(t.pnl)}</span>`
+        : `<span class="edge-badge">${pct(t.edge)}</span>`;
+      const badge = isClose
+        ? `<span class="side close" title="${esc(t.reason || '')}">CLOSE·${reasonTag(t.reason)}</span>`
+        : `<span class="side ${t.side}">${t.type} ${t.side === 'BUY_YES' ? 'YES' : 'NO'}</span>`;
+      return `<tr>
         <td class="t">${new Date(t.ts).toLocaleTimeString('en-US', { hour12: false })}</td>
-        <td><span class="side ${t.side}">${t.type} ${t.side === 'BUY_YES' ? 'YES' : 'NO'}</span></td>
+        <td>${badge}</td>
         <td class="q">${esc(t.question)}</td>
         <td class="num">${cents(t.price)}</td>
         <td class="num">${money(t.cost)}</td>
-        <td class="num edge-badge">${pct(t.edge)}</td>
-      </tr>`).join('');
+        <td class="num">${last}</td>
+      </tr>`;
+    }).join('');
   }
+}
+
+function reasonTag(r) {
+  return ({ TAKE_PROFIT: 'TP', STOP_LOSS: 'SL', RESOLVED: 'RES', EDGE_GONE: 'EDGE' }[r]) || (r || '');
+}
+
+function drawEquity(curve, p) {
+  const svg = $('eqChart');
+  const empty = $('eqEmpty');
+  const pts = curve.slice(-200);
+  if (pts.length < 2) {
+    svg.innerHTML = '';
+    empty.style.display = 'flex';
+    $('eqNow').textContent = money(p.equity);
+    $('eqDelta').textContent = '';
+    return;
+  }
+  empty.style.display = 'none';
+
+  const W = 800, H = 200, pad = 6;
+  const vals = pts.map((d) => d.equity);
+  const start = p.startBankroll;
+  const min = Math.min(...vals, start);
+  const max = Math.max(...vals, start);
+  const range = max - min || 1;
+  const x = (i) => pad + (i / (pts.length - 1)) * (W - 2 * pad);
+  const y = (v) => H - pad - ((v - min) / range) * (H - 2 * pad);
+
+  const line = pts.map((d, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(d.equity).toFixed(1)}`).join(' ');
+  const area = `${line} L${x(pts.length - 1).toFixed(1)},${H - pad} L${x(0).toFixed(1)},${H - pad} Z`;
+  const baseY = y(start).toFixed(1);
+  const up = vals[vals.length - 1] >= start;
+  const col = up ? 'var(--green)' : 'var(--red)';
+
+  svg.innerHTML = `
+    <defs>
+      <linearGradient id="eqfill" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="${up ? '#2fe08a' : '#ff5d73'}" stop-opacity="0.28"/>
+        <stop offset="100%" stop-color="${up ? '#2fe08a' : '#ff5d73'}" stop-opacity="0"/>
+      </linearGradient>
+    </defs>
+    <line x1="${pad}" y1="${baseY}" x2="${W - pad}" y2="${baseY}" stroke="var(--dim)" stroke-width="1" stroke-dasharray="4 4" opacity="0.6"/>
+    <path d="${area}" fill="url(#eqfill)"/>
+    <path d="${line}" fill="none" stroke="${col}" stroke-width="2" stroke-linejoin="round"/>`;
+
+  const delta = p.totalPnl;
+  $('eqNow').textContent = money(p.equity);
+  $('eqNow').className = 'eq-now';
+  const de = $('eqDelta');
+  de.textContent = `${sign(delta)}${money(delta)} (${sign(p.returnPct)}${p.returnPct}%)`;
+  de.className = 'eq-delta ' + cls(delta);
 }
 
 function kpi(label, val, sub, klass = '') {

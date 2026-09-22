@@ -48,6 +48,17 @@ export const config = {
   bankrollUsd: num(process.env.BANKROLL_USD, 10_000),
   kellyFraction: num(process.env.KELLY_FRACTION, 0.25),
 
+  // Portfolio-level exposure cap: total $ deployed across all open positions
+  // may never exceed this fraction of equity. Keeps dry powder for new edges
+  // and bounds correlated blow-ups.
+  maxPortfolioExposurePct: num(process.env.MAX_PORTFOLIO_EXPOSURE_PCT, 0.60),
+
+  // Position exit rules, checked every scan on open positions:
+  takeProfitPct: num(process.env.TAKE_PROFIT_PCT, 0.40),   // +40% on cost -> close
+  stopLossPct: num(process.env.STOP_LOSS_PCT, 0.25),       // -25% on cost -> close
+  exitEdgeFloor: num(process.env.EXIT_EDGE_FLOOR, 0.02),   // edge gone (<2%) -> close
+  resolveThreshold: num(process.env.RESOLVE_THRESHOLD, 0.97), // price ~resolved -> take it
+
   polymarket: {
     gammaUrl: str(process.env.POLYMARKET_GAMMA_URL, 'https://gamma-api.polymarket.com'),
     clobUrl: str(process.env.POLYMARKET_CLOB_URL, 'https://clob.polymarket.com'),

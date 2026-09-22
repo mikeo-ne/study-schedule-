@@ -4,8 +4,12 @@
 //
 // NOTE: This path requires outbound network access to *.polymarket.com and,
 // for live order submission, valid CLOB API credentials + a signing wallet.
-// Order signing (EIP-712) is intentionally left as a guarded stub so the bot
-// cannot accidentally move real funds without a deliberate implementation.
+//
+// Real order submission uses Polymarket's official CLOB client, loaded lazily
+// so the app runs without it in paper/sim mode. To enable live trading:
+//     npm install @polymarket/clob-client ethers@6
+// and set TRADE_MODE=live plus the POLY_* credentials in .env. Until BOTH the
+// package is installed AND TRADE_MODE=live, submitOrder refuses to place orders.
 
 export class PolymarketProvider {
   constructor(config, { xClient } = {}) {
@@ -13,6 +17,7 @@ export class PolymarketProvider {
     this.xClient = xClient;
     this.gamma = config.polymarket.gammaUrl.replace(/\/$/, '');
     this.clob = config.polymarket.clobUrl.replace(/\/$/, '');
+    this._clobClient = null; // memoized official client
   }
 
   name() {
@@ -81,15 +86,82 @@ export class PolymarketProvider {
     return this.xClient.sentimentFor(market.question);
   }
 
+  // Lazily construct the official Polymarket CLOB client. Requires the optional
+  // dependency and a signing wallet; throws a clear message if either is missing.
+  async _getClobClient() {
+    if (this._clobClient) return this._clobClient;
+
+    let ClobPkg, ethers;
+    try {
+      ClobPkg = await import('@polymarket/clob-client');
+      ethers = await import('ethers');
+    } catch {
+      throw new Error(
+        'Live trading needs the official client: run `npm install @polymarket/clob-client ethers@6`'
+      );
+    }
+
+    const { ClobClient } = ClobPkg;
+    const p = this.config.polymarket;
+    if (!p.privateKey) throw new Error('POLY_PRIVATE_KEY is required for live trading');
+
+    const signer = new ethers.Wallet(p.privateKey);
+    const creds = {
+      key: p.apiKey,
+      secret: p.apiSecret,
+      passphrase: p.apiPassphrase,
+    };
+    // chainId 137 = Polygon mainnet, where Polymarket settles.
+    this._clobClient = new ClobClient(this.clob, 137, signer, creds, undefined, p.funder || undefined);
+    return this._clobClient;
+  }
+
+  // Resolve the CLOB token id for the side we want to trade.
+  _tokenIdFor(market, side) {
+    const ids = market._clobTokenIds;
+    if (!Array.isArray(ids) || ids.length < 2) {
+      throw new Error(`market ${market.id} is missing clobTokenIds`);
+    }
+    // Convention: index 0 = YES, index 1 = NO.
+    return side === 'BUY_YES' || side === 'SELL_YES' ? ids[0] : ids[1];
+  }
+
   async submitOrder({ market, side, sizeUsd }) {
     if (this.config.tradeMode !== 'live') {
       throw new Error('submitOrder called but TRADE_MODE is not live');
     }
-    // Guard rail: real order signing is not implemented on purpose.
-    throw new Error(
-      'Live order submission is not implemented. Implement EIP-712 CLOB order ' +
-      'signing here with POLY_PRIVATE_KEY before enabling real trading.'
-    );
+
+    const client = await this._getClobClient();
+    const ClobPkg = await import('@polymarket/clob-client');
+    const { Side, OrderType } = ClobPkg;
+
+    const tokenId = this._tokenIdFor(market, side);
+    const isBuy = side.startsWith('BUY');
+    // Cross the spread to fill: buy at ask, sell at bid.
+    const price = isBuy ? market.bestAsk : market.bestBid;
+    const size = Math.max(1, Math.floor(sizeUsd / price)); // number of shares
+
+    const signedOrder = await client.createOrder({
+      tokenID: tokenId,
+      price,
+      side: isBuy ? Side.BUY : Side.SELL,
+      size,
+      feeRateBps: 0,
+    });
+
+    // FOK/GTC: use marketable limit to take liquidity now.
+    const resp = await client.postOrder(signedOrder, OrderType.GTC);
+    if (!resp || resp.success === false) {
+      throw new Error('CLOB rejected order: ' + JSON.stringify(resp));
+    }
+
+    return {
+      accepted: true,
+      avgPrice: Number(resp.price ?? price),
+      slippage: Math.abs(Number(resp.price ?? price) - price),
+      orderId: resp.orderID ?? resp.orderId ?? null,
+      ts: Date.now(),
+    };
   }
 }
 

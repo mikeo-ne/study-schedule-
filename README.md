@@ -22,12 +22,14 @@ Every `SCAN_INTERVAL_MS` (default **10 minutes**) the agent runs six phases:
 | 🌐 **BROWSER** | Loads the full active-market universe (target ~2,000) |
 | 🔎 **RESEARCH** | Screens by liquidity, then reads X sentiment on the most active markets |
 | 📊 **ANALYZE** | Blends sentiment + book microstructure into a **fair-value estimate**; computes edge = \|fair − market\| |
+| 🛡 **MANAGE** | Reviews open positions and closes on **take-profit, stop-loss, resolution, or edge-gone** before deploying new capital |
 | ✅ **DECIDE** | Keeps only markets with **edge ≥ 8%**, enough liquidity, and edge that survives the spread |
-| 📐 **SIZE** | **Fractional Kelly** sizing, hard-capped at **6% of equity per bet** so one bad call can't wipe the bankroll |
-| ⚡ **EXECUTE** | Places a **paper fill** against the book (or a guarded live order) |
+| 📐 **SIZE** | **Fractional Kelly** sizing, hard-capped at **6% of equity per bet**; also respects a **60%-of-equity portfolio exposure cap** |
+| ⚡ **EXECUTE** | Places a **paper fill** against the book (or a real CLOB order in live mode) |
 
-The dashboard shows equity/P&L, a live phase pipeline, a scrolling terminal, a
-mispricing radar, open positions, and a trade blotter — updating every 2s.
+The dashboard shows equity/P&L, an **equity curve**, a live phase pipeline, a
+scrolling terminal, a mispricing radar, open positions, and a trade blotter —
+updating every 2s.
 
 ---
 
@@ -51,36 +53,104 @@ SCAN_INTERVAL_MS=45000 npm start
 
 ---
 
-## Going live (real Polymarket data)
+## 🔌 Connecting it — step by step (to actually trade / make money)
 
-Copy `.env.example` → `.env` and set:
+There are **three levels**. Go through them in order; do not skip to Level 3.
 
-```ini
-DATA_SOURCE=live            # use the real Polymarket Gamma/CLOB APIs
-X_BEARER_TOKEN=...          # optional: real X sentiment (v2 recent search)
+### Level 0 — Watch it work (no accounts, no network) ✅ you are here
+```bash
+npm install && npm start        # http://localhost:3000
 ```
-
-This pulls real markets and (if a token is set) real X sentiment, while still
-**paper trading** the results — a completely safe way to backtest the strategy
-against live prices.
-
-> Requires outbound network access to `*.polymarket.com` and `api.twitter.com`.
+Runs the simulator + paper trading. Learn the dashboard, tune the risk knobs,
+convince yourself the strategy behaves. **Nothing here can lose money.**
 
 ---
 
-## Going live (real orders) — read this
+### Level 1 — Paper-trade against REAL live prices (still no money at risk)
+This is the honest way to see if the edge is real before risking a cent.
 
-Real trading is **intentionally gated** behind two things:
+1. **Get an X (Twitter) API bearer token** *(optional but recommended for real
+   sentiment).* Go to <https://developer.x.com> → create a project/app → copy the
+   **Bearer Token**. The free tier is enough for recent-search.
+2. Copy the env file and edit it:
+   ```bash
+   cp .env.example .env
+   ```
+   ```ini
+   DATA_SOURCE=live          # pull the real ~2,000 Polymarket markets
+   TRADE_MODE=paper          # keep fills simulated — no real orders
+   X_BEARER_TOKEN=xxxxx      # optional real sentiment; leave blank to skip
+   ```
+3. Run it from **a machine with normal internet** (the bot needs to reach
+   `gamma-api.polymarket.com` and `api.twitter.com`):
+   ```bash
+   npm start
+   ```
+4. Let it run for days/weeks. Watch the **equity curve** and **win rate**. If it
+   is not profitable on paper against live prices, it will not be profitable with
+   real money. Tune `EDGE_THRESHOLD`, `KELLY_FRACTION`, and the exit rules here.
 
-1. `TRADE_MODE=live` **and** complete CLOB credentials in `.env`
-   (`POLY_API_KEY`, `POLY_API_SECRET`, `POLY_API_PASSPHRASE`, `POLY_PRIVATE_KEY`).
-   If any are missing the app **forces paper mode** on boot.
-2. Implementing EIP-712 CLOB order signing in
-   `server/providers/polymarketProvider.js` (`submitOrder`), which currently
-   **throws on purpose** so the bot cannot move funds by accident.
+> ⚠️ This sandbox/preview cannot reach Polymarket (its DNS is IPv6-only with no
+> IPv6 route), so Level 1+ must be run on your own machine or a normal VPS.
 
-Prediction markets are real money and can go to zero. Only you can flip these
-switches — do so at your own risk, ideally with tiny size first.
+---
+
+### Level 2 — Live trading with REAL money (do this last, start tiny)
+
+Polymarket settles on **Polygon** in **USDC**. You need a funded wallet and CLOB
+API credentials.
+
+1. **Create/fund your Polymarket account**
+   - Sign up at <https://polymarket.com>, complete access requirements for your
+     region, and deposit **USDC on Polygon** into your Polymarket wallet.
+   - Export the **private key** of the wallet that holds the funds. Treat it like
+     cash — anyone with it can drain the wallet.
+2. **Generate CLOB API credentials** (key / secret / passphrase) — from the
+   Polymarket CLOB (`https://clob.polymarket.com`) using their
+   [API-key derivation](https://docs.polymarket.com/) flow (the official client
+   below can derive them from your wallet).
+3. **Install the official trading client** (kept optional so paper mode needs no
+   extra deps):
+   ```bash
+   npm install @polymarket/clob-client ethers@6
+   ```
+4. **Fill in `.env`** (never commit this file — it's git-ignored):
+   ```ini
+   DATA_SOURCE=live
+   TRADE_MODE=live
+   POLY_API_KEY=...
+   POLY_API_SECRET=...
+   POLY_API_PASSPHRASE=...
+   POLY_PRIVATE_KEY=0x....        # wallet that holds your USDC — KEEP SECRET
+   POLY_FUNDER_ADDRESS=0x....     # your Polymarket funding address
+   # Start tiny while you gain trust:
+   BANKROLL_USD=50
+   MAX_POSITION_PCT=0.02          # 2% per bet
+   MAX_PORTFOLIO_EXPOSURE_PCT=0.20
+   ```
+5. **Start it:**
+   ```bash
+   npm start
+   ```
+   On boot the bot verifies every credential is present — **if anything is
+   missing it automatically forces paper mode** and tells you. When live, the
+   `EXECUTE` phase signs real EIP-712 orders and posts them to the CLOB via the
+   official client (`server/providers/polymarketProvider.js`).
+
+**Where the "connect" happens in code:** `server/providers/polymarketProvider.js`
+→ `fetchMarkets()` (Gamma API), `fetchSentiment()` (X), and `submitOrder()`
+(CLOB order signing). That one file is the entire bridge to the outside world.
+
+---
+
+### 💸 Realistic expectations
+
+- Paper-profitable ≠ live-profitable: real fills have **slippage, fees, and
+  thinner books** than the model assumes.
+- Edge on prediction markets is **competitive and decays** — treat this as a
+  research framework you must keep improving, not a money printer.
+- **Only risk what you can afford to lose.** Prediction-market positions can go
+  to **zero**. Start with `BANKROLL_USD=50` and scale only after weeks of proof.
 
 ---
 
@@ -99,6 +169,11 @@ All settings live in `.env` (see `.env.example`):
 | `KELLY_FRACTION` | `0.25` | Fractional Kelly multiplier on full Kelly |
 | `MAX_POSITION_PCT` | `0.06` | **Risk rail: max 6% of equity per bet** |
 | `MAX_POSITION_USD` | `0` | Optional absolute $ ceiling (0 = off) |
+| `MAX_PORTFOLIO_EXPOSURE_PCT` | `0.60` | Max total equity deployed at once |
+| `TAKE_PROFIT_PCT` | `0.40` | Close a winner at +40% on cost |
+| `STOP_LOSS_PCT` | `0.25` | Close a loser at −25% on cost |
+| `EXIT_EDGE_FLOOR` | `0.02` | Close when modeled edge falls below 2% |
+| `RESOLVE_THRESHOLD` | `0.97` | Treat ≥97c positions as resolved |
 | `BANKROLL_USD` | `10000` | Starting paper bankroll |
 
 ---
@@ -120,6 +195,29 @@ one bad call can't wipe it out. Because the cap is a *percentage of live equity*
 bets shrink automatically after drawdowns and grow as the bankroll compounds.
 When the rail binds a bet, it's flagged 🛡 in the mispricing radar and noted in
 the terminal log.
+
+### Portfolio exposure cap
+
+On top of per-bet sizing, total capital deployed across **all** open positions
+can never exceed `MAX_PORTFOLIO_EXPOSURE_PCT` of equity (default **60%**). This
+keeps dry powder for fresh edges and bounds correlated blow-ups. When the cap is
+hit the agent logs *"Exposure cap reached — holding dry powder"* and stops
+opening new positions until something closes.
+
+### Position exits (the MANAGE phase)
+
+Every scan, before deploying new capital, the agent reviews open positions and
+closes any that trigger a rule:
+
+| Rule | Default | Meaning |
+|------|---------|---------|
+| **Take-profit** | `+40%` on cost | lock in winners |
+| **Stop-loss** | `−25%` on cost | cut losers before they compound |
+| **Resolved** | mark ≥ `97c` | market effectively decided — realize it |
+| **Edge-gone** | edge < `2%` | thesis played out; free the capital |
+
+Closes are realized into cash + `realizedPnl`, update the win/loss record, and
+appear in the blotter tagged `CLOSE·TP / SL / RES / EDGE`.
 
 ## Architecture
 

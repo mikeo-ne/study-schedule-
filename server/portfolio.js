@@ -25,6 +25,9 @@ export class Portfolio {
       positions: {},   // marketId -> position
       trades: [],      // blotter
       realizedPnl: 0,
+      wins: 0,
+      losses: 0,
+      equityCurve: [], // [{ ts, equity }] sampled each scan
       createdAt: Date.now(),
     };
   }
@@ -82,6 +85,55 @@ export class Portfolio {
     return pos;
   }
 
+  // Close an existing position at a fill price, realizing P&L.
+  close({ marketId, fill, reason, mode }) {
+    const pos = this.state.positions[marketId];
+    if (!pos) return null;
+    const proceeds = round2(pos.shares * fill.avgPrice);
+    const costBasis = round2(pos.shares * pos.avgPrice);
+    const pnl = round2(proceeds - costBasis);
+
+    this.state.cash = round2(this.state.cash + proceeds);
+    this.state.realizedPnl = round2(this.state.realizedPnl + pnl);
+    if (pnl >= 0) this.state.wins += 1; else this.state.losses += 1;
+    delete this.state.positions[marketId];
+
+    this.state.trades.unshift({
+      type: 'CLOSE',
+      mode,
+      reason,
+      marketId,
+      question: pos.question,
+      side: pos.side,
+      shares: pos.shares,
+      price: fill.avgPrice,
+      cost: proceeds,
+      pnl,
+      edge: 0,
+      slippage: fill.slippage,
+      ts: fill.ts,
+    });
+    this.state.trades = this.state.trades.slice(0, 300);
+    this.save();
+    return { pos, pnl, reason };
+  }
+
+  // Total $ currently deployed (cost basis of open positions).
+  deployedCost() {
+    let sum = 0;
+    for (const p of Object.values(this.state.positions)) sum += p.cost;
+    return round2(sum);
+  }
+
+  // Record one point on the equity curve (call once per scan).
+  recordEquity(equity) {
+    this.state.equityCurve.push({ ts: Date.now(), equity: round2(equity) });
+    // Keep a rolling window so state.json stays small.
+    if (this.state.equityCurve.length > 500) {
+      this.state.equityCurve = this.state.equityCurve.slice(-500);
+    }
+  }
+
   // Mark open positions to current market prices; returns unrealized P&L.
   markToMarket(marketsById) {
     let unrealized = 0;
@@ -117,7 +169,17 @@ export class Portfolio {
       returnPct: round4((totalPnl / this.state.startBankroll) * 100),
       openPositions: Object.keys(this.state.positions).length,
       totalTrades: this.state.trades.length,
+      wins: this.state.wins,
+      losses: this.state.losses,
+      winRate: (this.state.wins + this.state.losses) > 0
+        ? round4(this.state.wins / (this.state.wins + this.state.losses))
+        : null,
+      exposurePct: equity > 0 ? round4(exposure / equity) : 0,
     };
+  }
+
+  equityCurve() {
+    return this.state.equityCurve;
   }
 }
 

@@ -106,11 +106,26 @@ export class Agent {
         { count: signals.length }
       );
 
-      // 5/6. SIZE + EXECUTE — act on the best, skipping ones we already hold.
+      // 5. MANAGE — exit positions that hit take-profit / stop-loss / resolved
+      //    / edge-gone, BEFORE deploying fresh capital.
+      await this.manageExits();
+
+      // 6/7. SIZE + EXECUTE — act on the best, respecting the exposure cap.
+      const equityNow = this.portfolio.summary(this.marketsById).equity;
+      const exposureCapUsd = this.config.maxPortfolioExposurePct * equityNow;
       let executed = 0;
+      let skippedExposure = false;
+
       for (const sig of signals) {
         if (this.portfolio.hasPosition(sig.marketId)) continue;
-        if (this.portfolio.state.cash < sig.entryPrice * 1) break; // out of cash
+
+        // Portfolio-level exposure cap: never deploy past the ceiling.
+        const deployed = this.portfolio.deployedCost();
+        if (deployed + sig.sizeUsd > exposureCapUsd) {
+          skippedExposure = true;
+          continue;
+        }
+        if (this.portfolio.state.cash < sig.sizeUsd) continue; // not enough cash
         const market = this.marketsById.get(sig.marketId);
 
         const kellyNote = sig.riskCapped
@@ -121,18 +136,11 @@ export class Agent {
           { marketId: sig.marketId, edge: sig.edge });
 
         let fill;
-        if (this.config.tradeMode === 'live') {
-          try {
-            fill = await this.provider.submitOrder({ market, side: sig.side, sizeUsd: sig.sizeUsd });
-          } catch (e) {
-            this.emit('error', 'EXECUTE', `Live order rejected: ${e.message}`);
-            continue;
-          }
-        } else {
-          // Paper fill via provider's simulated book (or synthesize for live data).
-          fill = market && this.provider.submitOrder && this.provider.name() === 'simulator'
-            ? await this.provider.submitOrder({ market, side: sig.side, sizeUsd: sig.sizeUsd })
-            : { accepted: true, avgPrice: sig.entryPrice, slippage: 0, ts: Date.now() };
+        try {
+          fill = await this._fill({ market, side: sig.side, sizeUsd: sig.sizeUsd, entryPrice: sig.entryPrice });
+        } catch (e) {
+          this.emit('error', 'EXECUTE', `Order rejected: ${e.message}`);
+          continue;
         }
 
         const pos = this.portfolio.open({ signal: sig, fill, mode: this.config.tradeMode });
@@ -145,10 +153,17 @@ export class Agent {
         if (executed >= 5) break; // per-scan trade cap
       }
 
-      // Mark book + report equity.
+      if (skippedExposure) {
+        this.emit('info', 'EXECUTE',
+          `Exposure cap reached (${(this.config.maxPortfolioExposurePct * 100).toFixed(0)}% of equity) — holding dry powder`);
+      }
+
+      // Mark book, record equity point, report.
       const after = this.portfolio.summary(this.marketsById);
+      this.portfolio.recordEquity(after.equity);
+      this.portfolio.save();
       this.emit('info', 'PORTFOLIO',
-        `Equity $${fmt(after.equity)} | cash $${fmt(after.cash)} | ${after.openPositions} open | P&L $${fmt(after.totalPnl)} (${after.returnPct}%)`);
+        `Equity $${fmt(after.equity)} | cash $${fmt(after.cash)} | ${after.openPositions} open (${(after.exposurePct * 100).toFixed(0)}% exp) | W/L ${after.wins}/${after.losses} | P&L $${fmt(after.totalPnl)} (${after.returnPct}%)`);
 
       this.status = 'idle';
       this.lastScanAt = Date.now();
@@ -164,6 +179,67 @@ export class Agent {
     }
   }
 
+  // Obtain a fill for an order, from the live provider or a paper simulation.
+  async _fill({ market, side, sizeUsd, entryPrice }) {
+    if (this.config.tradeMode === 'live') {
+      return this.provider.submitOrder({ market, side, sizeUsd });
+    }
+    if (market && this.provider.name() === 'simulator') {
+      return this.provider.submitOrder({ market, side, sizeUsd });
+    }
+    return { accepted: true, avgPrice: entryPrice, slippage: 0, ts: Date.now() };
+  }
+
+  // Exit price for an open position (what we'd receive selling out now).
+  _exitPrice(pos, market) {
+    return pos.side === 'BUY_YES' ? market.bestBid : (1 - market.bestAsk);
+  }
+
+  // MANAGE phase: check every open position for take-profit, stop-loss,
+  // near-resolution, or edge-gone, and close the ones that trigger.
+  async manageExits() {
+    const positions = Object.values(this.portfolio.state.positions);
+    if (positions.length === 0) return 0;
+    let closed = 0;
+
+    for (const pos of positions) {
+      const market = this.marketsById.get(pos.marketId);
+      if (!market) continue;
+
+      const markPrice = this._exitPrice(pos, market);
+      const retPct = (markPrice - pos.avgPrice) / pos.avgPrice;
+
+      // Re-derive current edge to know if our thesis still holds.
+      const sentiment = await this.provider.fetchSentiment(market);
+      const sig = evaluateMarket(market, sentiment, this.config, this.portfolio.summary(this.marketsById).equity);
+      const stillOurSide = sig.side === pos.side;
+      const edgeNow = stillOurSide ? sig.edge : -sig.edge;
+
+      let reason = null;
+      if (markPrice >= this.config.resolveThreshold) reason = 'RESOLVED';
+      else if (retPct >= this.config.takeProfitPct) reason = 'TAKE_PROFIT';
+      else if (retPct <= -this.config.stopLossPct) reason = 'STOP_LOSS';
+      else if (edgeNow < this.config.exitEdgeFloor) reason = 'EDGE_GONE';
+
+      if (!reason) continue;
+
+      const fill = await this._fill({
+        market, side: pos.side === 'BUY_YES' ? 'SELL_YES' : 'SELL_NO',
+        sizeUsd: pos.value || pos.cost, entryPrice: markPrice,
+      });
+      const res = this.portfolio.close({ marketId: pos.marketId, fill, reason, mode: this.config.tradeMode });
+      if (res) {
+        closed++;
+        const lvl = res.pnl >= 0 ? 'trade' : 'warn';
+        this.emit(lvl, 'MANAGE',
+          `CLOSE (${reason}) ${pos.side} "${truncate(pos.question)}" @ ${(fill.avgPrice * 100).toFixed(1)}c — P&L ${res.pnl >= 0 ? '+' : ''}$${fmt(res.pnl)}`,
+          { marketId: pos.marketId, pnl: res.pnl });
+      }
+    }
+    if (closed) this.emit('info', 'MANAGE', `Closed ${closed} position(s) this scan`);
+    return closed;
+  }
+
   snapshot() {
     const summ = this.portfolio.summary(this.marketsById);
     return {
@@ -177,6 +253,9 @@ export class Agent {
         minLiquidityUsd: this.config.minLiquidityUsd,
         maxPositionPct: this.config.maxPositionPct,
         maxPositionUsd: this.config.maxPositionUsd,
+        maxPortfolioExposurePct: this.config.maxPortfolioExposurePct,
+        takeProfitPct: this.config.takeProfitPct,
+        stopLossPct: this.config.stopLossPct,
         scanIntervalMs: this.config.scanIntervalMs,
         marketUniverse: this.config.marketUniverse,
         kellyFraction: this.config.kellyFraction,
@@ -189,6 +268,7 @@ export class Agent {
       positions: Object.values(this.portfolio.state.positions).sort((a, b) => (b.unrealizedPnl || 0) - (a.unrealizedPnl || 0)),
       opportunities: this.opportunities,
       trades: this.portfolio.state.trades.slice(0, 40),
+      equityCurve: this.portfolio.equityCurve(),
       log: this.log.slice(0, 120),
     };
   }
