@@ -1,7 +1,15 @@
-# Runtime data created by the planner; do not commit personal study history.
-study log.txt
+# Dependencies
+node_modules/
 
-# Python bytecode and local caches.
-__pycache__/
-*.py[cod]
-.pytest_cache/
+# Local env / secrets — NEVER commit private keys or API creds
+.env
+.env.local
+*.key
+
+# Runtime state written by the agent
+data/state.json
+data/*.log
+logs/
+
+# OS junk
+.DS_Store

@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>polymkt-alpha · autonomous Polymarket agent</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">◎</span>
+      <div>
+        <h1>polymkt<span>-alpha</span></h1>
+        <p class="tagline">autonomous prediction-market trading agent</p>
+      </div>
+    </div>
+    <div class="header-stats" id="headerStats"></div>
+    <div class="controls">
+      <span class="pill" id="modePill">paper</span>
+      <span class="pill" id="sourcePill">sim</span>
+      <button id="scanBtn" class="btn">Force scan</button>
+      <button id="toggleBtn" class="btn btn-ghost">Pause</button>
+    </div>
+  </header>
+
+  <main class="grid">
+    <!-- KPI row -->
+    <section class="kpis" id="kpis"></section>
+
+    <!-- Left: research loop terminal -->
+    <section class="panel terminal">
+      <div class="panel-head">
+        <h2>◈ research loop</h2>
+        <div class="loop-status">
+          <span id="loopPhase" class="phase">idle</span>
+          <span id="countdown" class="countdown"></span>
+        </div>
+      </div>
+      <div class="pipeline" id="pipeline">
+        <div class="stage" data-stage="BROWSER"><span>browser</span></div>
+        <div class="stage" data-stage="RESEARCH"><span>research</span></div>
+        <div class="stage" data-stage="ANALYZE"><span>analyze</span></div>
+        <div class="stage" data-stage="DECIDE"><span>decide</span></div>
+        <div class="stage" data-stage="EXECUTE"><span>execute</span></div>
+      </div>
+      <div class="log" id="log"></div>
+    </section>
+
+    <!-- Right column -->
+    <section class="panel opportunities">
+      <div class="panel-head">
+        <h2>◈ mispricing radar</h2>
+        <span class="hint" id="oppHint"></span>
+      </div>
+      <div class="table-wrap">
+        <table id="oppTable">
+          <thead>
+            <tr>
+              <th>market</th><th>side</th><th class="num">mkt</th><th class="num">fair</th>
+              <th class="num">edge</th><th class="num">sent</th><th class="num">size</th>
+            </tr>
+          </thead>
+          <tbody id="oppBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel positions">
+      <div class="panel-head"><h2>◈ open positions</h2><span class="hint" id="posHint"></span></div>
+      <div class="table-wrap">
+        <table id="posTable">
+          <thead>
+            <tr><th>market</th><th>side</th><th class="num">sh</th><th class="num">entry</th><th class="num">mark</th><th class="num">uP&L</th></tr>
+          </thead>
+          <tbody id="posBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel blotter">
+      <div class="panel-head"><h2>◈ trade blotter</h2><span class="hint" id="tradeHint"></span></div>
+      <div class="table-wrap">
+        <table id="tradeTable">
+          <thead>
+            <tr><th>time</th><th>action</th><th>market</th><th class="num">px</th><th class="num">$</th><th class="num">edge</th></tr>
+          </thead>
+          <tbody id="tradeBody"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <span id="footStatus">connecting…</span>
+    <span class="sep">·</span>
+    <span>paper trading — no real funds at risk unless you configure live keys</span>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,49 +1,139 @@
-# Smart Study Planner
+# polymkt-alpha 🤖◎
 
-A console-based Python programme for logging, reviewing and analysing study
-sessions throughout a semester. It stores each session as a dictionary in an
-in-memory list and persists the list as `study log.txt`, so sessions are still
-available the next time the programme is run.
+> An autonomous AI trading agent for [Polymarket](https://polymarket.com) — inspired by the bot in [this TikTok](https://www.tiktok.com/@agilesingh/video/7685446237377580309).
 
-## Run the programme
+It runs its own **research loop** on a timer: it "opens a browser" onto the
+Polymarket universe (~2,000 prediction markets), **reads X/Twitter sentiment**,
+estimates each market's **fair value**, hunts for **mispricing over 8%**, then
+**sizes and executes** positions — all streamed to a live trading-terminal
+dashboard.
 
-Python 3.8 or later is recommended.
+**Paper trading by default. No real money moves unless you deliberately wire up
+live keys.**
+
+---
+
+## What it does (the loop)
+
+Every `SCAN_INTERVAL_MS` (default **10 minutes**) the agent runs six phases:
+
+| Phase | What happens |
+|-------|--------------|
+| 🌐 **BROWSER** | Loads the full active-market universe (target ~2,000) |
+| 🔎 **RESEARCH** | Screens by liquidity, then reads X sentiment on the most active markets |
+| 📊 **ANALYZE** | Blends sentiment + book microstructure into a **fair-value estimate**; computes edge = \|fair − market\| |
+| ✅ **DECIDE** | Keeps only markets with **edge ≥ 8%**, enough liquidity, and edge that survives the spread |
+| 📐 **SIZE** | **Fractional Kelly** sizing, capped per position |
+| ⚡ **EXECUTE** | Places a **paper fill** against the book (or a guarded live order) |
+
+The dashboard shows equity/P&L, a live phase pipeline, a scrolling terminal, a
+mispricing radar, open positions, and a trade blotter — updating every 2s.
+
+---
+
+## Quick start
 
 ```bash
-python3 smart_study_planner.py
+npm install
+npm start            # -> http://localhost:3000
 ```
 
-The menu repeats until **Save and exit** is selected. On the first run there
-may be no `study log.txt`; this is handled automatically. On exit the file is
-written as readable JSON. The file is local runtime data and is ignored by Git
-so a student's personal study history is not accidentally committed.
+That's it. With no configuration it runs a **built-in market simulator** (2,000
+synthetic-but-realistic markets with drifting fair values, order books,
+liquidity, and X-sentiment signals) so you can watch the whole system work with
+**zero network access or API keys**.
 
-## Menu options
+To watch the loop cycle faster during a demo:
 
-1. **Add a study session** – records a subject, topic, date/day label and a
-   positive duration in minutes. Invalid durations are rejected until a valid
-   number is entered.
-2. **View all sessions** – prints a table with the duration classification:
-   `Short` (under 30 minutes), `Medium` (30–90 minutes), or `Long` (over 90
-   minutes).
-3. **Search sessions by subject** – performs a case-insensitive subject match,
-   prints the matching table and reports the total time for that subject.
-4. **View statistics** – reports overall hours, hours per subject, the subject
-   with the least total study time, and the longest individual session.
-5. **Save and exit** – saves all sessions to `study log.txt` and closes the
-   programme.
+```bash
+SCAN_INTERVAL_MS=45000 npm start
+```
 
-## Code structure
+---
 
-The implementation is in [`smart_study_planner.py`](smart_study_planner.py):
+## Going live (real Polymarket data)
 
-- `main()` controls the menu loop and loads data at start-up.
-- `add_session()` validates input and creates a session dictionary.
-- `classify_session()` centralises the Short/Medium/Long rules.
-- `view_sessions()` and `search_by_subject()` display formatted tables.
-- `study_statistics()` calculates the requested study metrics.
-- `save_sessions()` and `load_sessions()` handle JSON persistence and missing
-  or malformed files without crashing.
+Copy `.env.example` → `.env` and set:
 
-A brief report and step-by-step operation evidence are available in
-[`ANSWER_SHEET.md`](ANSWER_SHEET.md).
+```ini
+DATA_SOURCE=live            # use the real Polymarket Gamma/CLOB APIs
+X_BEARER_TOKEN=...          # optional: real X sentiment (v2 recent search)
+```
+
+This pulls real markets and (if a token is set) real X sentiment, while still
+**paper trading** the results — a completely safe way to backtest the strategy
+against live prices.
+
+> Requires outbound network access to `*.polymarket.com` and `api.twitter.com`.
+
+---
+
+## Going live (real orders) — read this
+
+Real trading is **intentionally gated** behind two things:
+
+1. `TRADE_MODE=live` **and** complete CLOB credentials in `.env`
+   (`POLY_API_KEY`, `POLY_API_SECRET`, `POLY_API_PASSPHRASE`, `POLY_PRIVATE_KEY`).
+   If any are missing the app **forces paper mode** on boot.
+2. Implementing EIP-712 CLOB order signing in
+   `server/providers/polymarketProvider.js` (`submitOrder`), which currently
+   **throws on purpose** so the bot cannot move funds by accident.
+
+Prediction markets are real money and can go to zero. Only you can flip these
+switches — do so at your own risk, ideally with tiny size first.
+
+---
+
+## Configuration
+
+All settings live in `.env` (see `.env.example`):
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `DATA_SOURCE` | `sim` | `sim` (simulator) or `live` (real Polymarket) |
+| `TRADE_MODE` | `paper` | `paper` or `live` |
+| `SCAN_INTERVAL_MS` | `600000` | Time between full scans (10 min) |
+| `MARKET_UNIVERSE` | `2000` | How many markets to track |
+| `EDGE_THRESHOLD` | `0.08` | Minimum mispricing to trade (8%) |
+| `MIN_LIQUIDITY_USD` | `5000` | Skip thinner markets |
+| `MAX_POSITION_USD` | `250` | Hard cap per position |
+| `BANKROLL_USD` | `10000` | Starting paper bankroll |
+| `KELLY_FRACTION` | `0.25` | Fractional Kelly multiplier |
+
+---
+
+## Architecture
+
+```
+server/
+  index.js                     Express app + API + boot/safety wiring
+  config.js                    Env + .env loader
+  agent.js                     The research loop + activity log ("terminal")
+  strategy.js                  Fair value, edge detection, Kelly sizing
+  portfolio.js                 Paper-trading engine, P&L, persistence
+  providers/
+    simProvider.js             Built-in market + sentiment simulator
+    polymarketProvider.js      Live Gamma/CLOB provider (order signing stubbed)
+    xClient.js                 Live X/Twitter sentiment client
+  lib/rng.js                   Deterministic PRNG for the simulator
+public/                        Trading-terminal dashboard (vanilla JS)
+```
+
+The `sim` and `live` providers return the **same shape**, so the agent,
+strategy, and portfolio are completely provider-agnostic — flipping to real data
+is one env var.
+
+### API
+
+- `GET  /api/state` — full snapshot (portfolio, positions, opportunities, log)
+- `GET  /api/opportunities` — current ranked mispricings
+- `POST /api/scan` — force a scan now
+- `POST /api/control` `{ "action": "start" | "stop" }` — pause/resume the loop
+
+---
+
+## Disclaimer
+
+This is educational software. It is **not** financial advice. Prediction-market
+trading carries real risk of total loss. The default configuration never touches
+real funds; enabling live trading is entirely your responsibility.
