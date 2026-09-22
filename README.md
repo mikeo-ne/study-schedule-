@@ -154,6 +154,36 @@ API credentials.
 
 ---
 
+## 🔬 Backtest / replay mode
+
+Before risking anything, replay the **exact same** strategy + risk logic over
+simulated history and read honest performance metrics.
+
+**From the dashboard:** use the *"backtest / replay"* panel — set steps, step
+size, edge threshold and Kelly fraction, hit **Run backtest**, and you get an
+equity curve plus total return, CAGR, max drawdown, Sharpe/Sortino, win rate,
+profit factor, and per-trade expectancy.
+
+**From the CLI:**
+```bash
+node server/backtest-cli.js --steps 300 --stepHours 6 --edge 0.08 --kelly 0.25
+```
+Flags: `--steps`, `--stepHours`, `--edge`, `--kelly`, `--maxpos`, `--exposure`,
+`--universe`. Great for parameter sweeps (e.g. compare `--edge 0.05` vs `0.10`).
+
+The engine (`server/backtest.js`) drives a clock-injectable provider, resolves
+each market to YES/NO at its end date, and runs the identical
+`evaluateMarket` → Kelly → 6%/60% caps → take-profit/stop-loss/resolve/edge-gone
+pipeline the live agent uses — so a backtest reflects the real strategy, not a
+separate toy. Point it at a historical-data provider implementing the same
+interface (`fetchMarkets` / `fetchSentiment` / `submitOrder` / `resolveOutcome`)
+to backtest against real Polymarket history.
+
+> ⚠️ Backtest results here run on the **simulator**, which by construction
+> contains a persistent, exploitable edge. Real markets may not — a good
+> simulated Sharpe is a sanity check on the *mechanics*, not a promise of
+> profit. Always validate on live-data paper trading (Level 1) before Level 2.
+
 ## Configuration
 
 All settings live in `.env` (see `.env.example`):
@@ -228,6 +258,8 @@ server/
   agent.js                     The research loop + activity log ("terminal")
   strategy.js                  Fair value, edge detection, Kelly sizing
   portfolio.js                 Paper-trading engine, P&L, persistence
+  backtest.js                  Replay engine + performance metrics
+  backtest-cli.js              Command-line backtest runner
   providers/
     simProvider.js             Built-in market + sentiment simulator
     polymarketProvider.js      Live Gamma/CLOB provider (order signing stubbed)
@@ -246,6 +278,7 @@ is one env var.
 - `GET  /api/opportunities` — current ranked mispricings
 - `POST /api/scan` — force a scan now
 - `POST /api/control` `{ "action": "start" | "stop" }` — pause/resume the loop
+- `POST /api/backtest` `{ steps, stepHours, universe, edgeThreshold, kellyFraction, ... }` — run a replay, returns equity curve + metrics
 
 ---
 

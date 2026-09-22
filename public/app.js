@@ -221,5 +221,76 @@ $('toggleBtn').onclick = async () => {
   poll();
 };
 
+// --- Backtest ---
+$('btRun').onclick = async () => {
+  const btn = $('btRun');
+  btn.classList.add('running');
+  btn.textContent = 'Running…';
+  $('btEmpty').textContent = 'replaying strategy over simulated history…';
+  $('btEmpty').style.display = 'flex';
+  try {
+    const body = {
+      steps: Number($('btSteps').value),
+      stepHours: Number($('btStepH').value),
+      edgeThreshold: Number($('btEdge').value) / 100,
+      kellyFraction: Number($('btKelly').value),
+    };
+    const res = await fetch('/api/backtest', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    renderBacktest(data);
+  } catch (e) {
+    $('btEmpty').textContent = 'backtest failed: ' + e.message;
+    $('btEmpty').style.display = 'flex';
+  } finally {
+    btn.classList.remove('running');
+    btn.textContent = 'Run backtest';
+  }
+};
+
+function renderBacktest(data) {
+  const m = data.metrics;
+  const metric = (label, val, klass = '') => `<div class="bt-metric"><span class="bl">${label}</span><span class="bv ${klass}">${val}</span></div>`;
+  $('btMetrics').innerHTML = [
+    metric('Total return', `${sign(m.totalReturnPct)}${m.totalReturnPct}%`, cls(m.totalReturnPct)),
+    metric('End equity', money(m.endEquity)),
+    metric('Max drawdown', `-${m.maxDrawdownPct}%`, 'neg'),
+    metric('Sharpe (ann.)', m.sharpe, cls(m.sharpe)),
+    metric('Win rate', `${m.winRatePct}%`, ''),
+    metric('Profit factor', m.profitFactor == null ? '∞' : m.profitFactor, cls((m.profitFactor ?? 1) - 1)),
+    metric('W / L', `${m.wins} / ${m.losses}`),
+    metric('Expectancy/trade', money(m.expectancyUsd), cls(m.expectancyUsd)),
+  ].join('');
+  drawBtChart(data.equityCurve, m.startEquity);
+}
+
+function drawBtChart(curve, startEquity) {
+  const svg = $('btChart');
+  const empty = $('btEmpty');
+  if (!curve || curve.length < 2) { empty.style.display = 'flex'; svg.innerHTML = ''; return; }
+  empty.style.display = 'none';
+  const W = 800, H = 180, pad = 6;
+  const vals = curve.map((d) => d.equity);
+  const min = Math.min(...vals, startEquity);
+  const max = Math.max(...vals, startEquity);
+  const range = max - min || 1;
+  const x = (i) => pad + (i / (curve.length - 1)) * (W - 2 * pad);
+  const y = (v) => H - pad - ((v - min) / range) * (H - 2 * pad);
+  const line = curve.map((d, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(d.equity).toFixed(1)}`).join(' ');
+  const area = `${line} L${x(curve.length - 1).toFixed(1)},${H - pad} L${x(0).toFixed(1)},${H - pad} Z`;
+  const up = vals[vals.length - 1] >= startEquity;
+  const col = up ? 'var(--green)' : 'var(--red)';
+  svg.innerHTML = `
+    <defs><linearGradient id="btfill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="${up ? '#2fe08a' : '#ff5d73'}" stop-opacity="0.26"/>
+      <stop offset="100%" stop-color="${up ? '#2fe08a' : '#ff5d73'}" stop-opacity="0"/>
+    </linearGradient></defs>
+    <line x1="${pad}" y1="${y(startEquity).toFixed(1)}" x2="${W - pad}" y2="${y(startEquity).toFixed(1)}" stroke="var(--dim)" stroke-width="1" stroke-dasharray="4 4" opacity="0.6"/>
+    <path d="${area}" fill="url(#btfill)"/>
+    <path d="${line}" fill="none" stroke="${col}" stroke-width="2" stroke-linejoin="round"/>`;
+}
+
 poll();
 setInterval(poll, 2000);

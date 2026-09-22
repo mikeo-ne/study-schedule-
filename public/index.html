@@ -45,6 +45,27 @@
       </div>
     </section>
 
+    <!-- Backtest / replay -->
+    <section class="panel backtest">
+      <div class="panel-head">
+        <h2>◈ backtest / replay</h2>
+        <div class="bt-controls">
+          <label>steps <input id="btSteps" type="number" value="200" min="20" max="400"></label>
+          <label>step h <input id="btStepH" type="number" value="12" min="1" max="168"></label>
+          <label>edge% <input id="btEdge" type="number" value="8" min="1" max="40" step="0.5"></label>
+          <label>kelly <input id="btKelly" type="number" value="0.25" min="0.05" max="1" step="0.05"></label>
+          <button id="btRun" class="btn">Run backtest</button>
+        </div>
+      </div>
+      <div class="bt-body">
+        <div class="bt-chart-wrap">
+          <svg id="btChart" viewBox="0 0 800 180" preserveAspectRatio="none"></svg>
+          <div class="chart-empty" id="btEmpty">configure and run a backtest to replay the strategy over simulated history</div>
+        </div>
+        <div class="bt-metrics" id="btMetrics"></div>
+      </div>
+    </section>
+
     <!-- Left: research loop terminal -->
     <section class="panel terminal">
       <div class="panel-head">

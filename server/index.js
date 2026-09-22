@@ -8,6 +8,7 @@ import { PolymarketProvider } from './providers/polymarketProvider.js';
 import { XClient } from './providers/xClient.js';
 import { Portfolio } from './portfolio.js';
 import { Agent } from './agent.js';
+import { runBacktest } from './backtest.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -56,6 +57,52 @@ app.post('/api/control', (req, res) => {
   else return res.status(400).json({ error: 'action must be start or stop' });
   res.json({ ok: true, running: agent.running });
 });
+
+// --- Backtest / replay ---
+let backtestRunning = false;
+app.post('/api/backtest', async (req, res) => {
+  if (backtestRunning) return res.status(409).json({ error: 'backtest already running' });
+  const b = req.body || {};
+  const steps = clampInt(b.steps, 20, 400, 200);
+  const stepMs = clampInt(b.stepHours, 1, 168, 12) * 3_600_000;
+  const universe = clampInt(b.universe, 100, 2000, 600);
+
+  // Backtest against a fresh, clock-driven simulator, with optional overrides
+  // for the strategy knobs so users can compare configurations.
+  const btConfig = {
+    ...config,
+    marketUniverse: universe,
+    edgeThreshold: numOr(b.edgeThreshold, config.edgeThreshold),
+    kellyFraction: numOr(b.kellyFraction, config.kellyFraction),
+    maxPositionPct: numOr(b.maxPositionPct, config.maxPositionPct),
+    maxPortfolioExposurePct: numOr(b.maxPortfolioExposurePct, config.maxPortfolioExposurePct),
+    takeProfitPct: numOr(b.takeProfitPct, config.takeProfitPct),
+    stopLossPct: numOr(b.stopLossPct, config.stopLossPct),
+  };
+
+  let t = Date.now();
+  const clock = { get: () => t, advance: (ms) => { t += ms; } };
+  const btProvider = new SimProvider(btConfig, { nowFn: () => t, t0: t });
+
+  backtestRunning = true;
+  try {
+    const result = await runBacktest(btConfig, { provider: btProvider, clock, steps, stepMs });
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  } finally {
+    backtestRunning = false;
+  }
+});
+
+function clampInt(v, lo, hi, def) {
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : def;
+}
+function numOr(v, def) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : def;
+}
 
 // --- Static dashboard ---
 app.use(express.static(path.join(__dirname, '..', 'public')));
